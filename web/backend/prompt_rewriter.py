@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .llm_client import request_openai_chat_completion
+from .llm_client import build_rewrite_body, request_openai_chat_completion
 from .schemas import looks_like_question_mark_mojibake
 from codex_session_patcher.ctf_config.templates import (
     PROMPT_REWRITER_SYSTEM,
@@ -50,15 +50,14 @@ async def rewrite_prompt(
         f"{original_request}"
     )
 
-    body = {
-        "model": ai_model,
-        "messages": [
+    body = build_rewrite_body(
+        ai_endpoint,
+        ai_model,
+        [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
-        "max_tokens": 1024,
-        "temperature": 0.7,
-    }
+    )
 
     data = await request_openai_chat_completion(ai_endpoint, ai_key, body)
     choices = data.get("choices", [])

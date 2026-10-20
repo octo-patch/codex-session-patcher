@@ -18,7 +18,7 @@ from .schemas import (
     looks_like_question_mark_mojibake,
     normalize_mock_response,
 )
-from .llm_client import request_openai_chat_completion
+from .llm_client import build_rewrite_body, request_openai_chat_completion
 from codex_session_patcher.core import (
     RefusalDetector,
     SessionFormat,
@@ -191,12 +191,7 @@ def _sanitize_for_rewrite(text: str) -> str:
 
 async def call_llm(settings: Settings, messages: list[dict]) -> str:
     """调用 OpenAI 兼容的 LLM API"""
-    body = {
-        "model": settings.ai_model,
-        "messages": messages,
-        "max_tokens": 1024,
-        "temperature": 0.7,
-    }
+    body = build_rewrite_body(settings.ai_endpoint, settings.ai_model, messages)
 
     data = await request_openai_chat_completion(
         settings.ai_endpoint, settings.ai_key, body

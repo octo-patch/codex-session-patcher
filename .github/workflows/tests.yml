@@ -50,7 +50,7 @@ jobs:
 
       - name: Build frontend
         working-directory: web/frontend
-        run: npm ci && npm audit --audit-level=high && npm run build
+        run: npm ci && npm test && npm audit --audit-level=high && npm run build
 
       - name: Build wheel and source distribution
         run: python -m build

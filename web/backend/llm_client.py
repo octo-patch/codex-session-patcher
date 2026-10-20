@@ -14,6 +14,29 @@ def build_chat_completions_endpoint(ai_endpoint: str) -> str:
     return endpoint
 
 
+def build_rewrite_body(ai_endpoint: str, model: str, messages: list[dict]) -> dict:
+    """Keep short rewrite requests within the selected provider's contract."""
+    body = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 1024,
+        "temperature": 0.7,
+    }
+    if model == "MiniMax-M3.1-Flash" and build_chat_completions_endpoint(
+        ai_endpoint
+    ) in {
+        "https://api.minimax.io/v1/chat/completions",
+        "https://api.minimax.cn/v1/chat/completions",
+    }:
+        # Flash always thinks. Reserve room for thinking and the short answer,
+        # and use low effort for this bounded rewrite task. Temperature is fixed.
+        body.pop("max_tokens")
+        body.pop("temperature")
+        body["max_completion_tokens"] = 16384
+        body["reasoning_effort"] = "low"
+    return body
+
+
 def _truncate_text(text: str, limit: int = 200) -> str:
     text = (text or "").strip()
     if not text:
