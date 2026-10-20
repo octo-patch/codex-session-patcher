@@ -2,12 +2,10 @@
 REM Windows 打包脚本 - 生成 exe 可执行文件
 
 setlocal
-set VERSION=1.3.1
 set DIST_DIR=dist
 set PYTHON_BIN=
 
 echo === Codex Session Patcher 打包脚本 ===
-echo 版本: %VERSION%
 
 if not defined PYTHON_BIN (
     where python >nul 2>nul
@@ -40,6 +38,9 @@ if not defined PYTHON_BIN (
 )
 
 echo 使用 Python: %PYTHON_BIN%
+
+for /f "delims=" %%V in ('%PYTHON_BIN% -c "from codex_session_patcher import __version__; print(__version__)"') do set VERSION=%%V
+echo 版本: %VERSION%
 
 %PYTHON_BIN% -m pip --version >nul 2>nul
 if errorlevel 1 %PYTHON_BIN% -m ensurepip --upgrade >nul 2>nul

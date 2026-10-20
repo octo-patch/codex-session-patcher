@@ -1,11 +1,10 @@
 import httpx
-from fastapi.testclient import TestClient
 
 from web.backend.api import DEFAULT_MUGGLE_LEADS_ENDPOINT
 from web.backend.main import app
 
 
-def test_cooperation_intent_uses_author_default_endpoint(monkeypatch):
+def test_cooperation_intent_uses_author_default_endpoint(monkeypatch, asgi_client_factory):
     sent = {}
 
     class MockAsyncClient:
@@ -25,7 +24,7 @@ def test_cooperation_intent_uses_author_default_endpoint(monkeypatch):
 
     monkeypatch.delenv("MUGGLE_LEADS_ENDPOINT", raising=False)
     monkeypatch.setattr(httpx, "AsyncClient", MockAsyncClient)
-    client = TestClient(app)
+    client = asgi_client_factory(app)
 
     response = client.post(
         "/api/cooperation/intent",
@@ -42,7 +41,7 @@ def test_cooperation_intent_uses_author_default_endpoint(monkeypatch):
     assert sent["json"]["source_id"] == "codex-session-patcher"
 
 
-def test_cooperation_intent_forwards_to_muggle_leads(monkeypatch):
+def test_cooperation_intent_forwards_to_muggle_leads(monkeypatch, asgi_client_factory):
     sent = {}
 
     class MockAsyncClient:
@@ -62,7 +61,7 @@ def test_cooperation_intent_forwards_to_muggle_leads(monkeypatch):
 
     monkeypatch.setenv("MUGGLE_LEADS_ENDPOINT", "https://leads.example/api/sources/codex-session-patcher/intents")
     monkeypatch.setattr(httpx, "AsyncClient", MockAsyncClient)
-    client = TestClient(app)
+    client = asgi_client_factory(app)
 
     response = client.post(
         "/api/cooperation/intent",
@@ -85,7 +84,7 @@ def test_cooperation_intent_forwards_to_muggle_leads(monkeypatch):
     assert sent["json"]["name"] == "张三"
 
 
-def test_cooperation_intent_reports_remote_failure(monkeypatch):
+def test_cooperation_intent_reports_remote_failure(monkeypatch, asgi_client_factory):
     class MockAsyncClient:
         def __init__(self, timeout):
             pass
@@ -101,7 +100,7 @@ def test_cooperation_intent_reports_remote_failure(monkeypatch):
 
     monkeypatch.setenv("MUGGLE_LEADS_ENDPOINT", "https://leads.example/api/sources/codex-session-patcher/intents")
     monkeypatch.setattr(httpx, "AsyncClient", MockAsyncClient)
-    client = TestClient(app)
+    client = asgi_client_factory(app)
 
     response = client.post(
         "/api/cooperation/intent",

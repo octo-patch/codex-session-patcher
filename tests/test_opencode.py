@@ -257,6 +257,25 @@ class TestOpenCodeDBAdapter:
         # 清理
         os.remove(backup_path)
 
+    def test_backup_database_does_not_overwrite_same_second(self, adapter, test_db, monkeypatch):
+        from codex_session_patcher import file_ops
+
+        class FrozenDatetime:
+            @classmethod
+            def now(cls):
+                return cls()
+
+            def strftime(self, _format):
+                return "20260802_120000"
+
+        monkeypatch.setattr(file_ops, "datetime", FrozenDatetime)
+        first = adapter.backup_database()
+        second = adapter.backup_database()
+
+        assert first != second
+        assert os.path.exists(first)
+        assert os.path.exists(second)
+
     def test_restore_database(self, adapter, test_db, tmp_path):
         backup_path = adapter.backup_database()
 
@@ -275,6 +294,28 @@ class TestOpenCodeDBAdapter:
 
         # 清理
         os.remove(backup_path)
+
+    def test_restore_rejects_corrupt_backup_without_changing_database(self, adapter, tmp_path):
+        backup = tmp_path / "corrupt.bak"
+        backup.write_bytes(b"not a sqlite database")
+
+        with pytest.raises(sqlite3.DatabaseError):
+            adapter.restore_database(str(backup))
+
+        assert adapter.get_session_message_count("sess1") == 3
+
+    def test_restore_rejects_symlink_backup(self, adapter, tmp_path):
+        backup = adapter.backup_database()
+        link = tmp_path / "linked.bak"
+        try:
+            link.symlink_to(backup)
+        except (OSError, NotImplementedError):
+            pytest.skip("当前平台不支持测试符号链接")
+
+        from codex_session_patcher.file_ops import UnsafeFileError
+
+        with pytest.raises(UnsafeFileError):
+            adapter.restore_database(str(link))
 
     def test_get_session_message_count(self, adapter):
         count = adapter.get_session_message_count('sess1')
@@ -399,7 +440,31 @@ class TestOpenCodeCTFInstaller:
 
         with open(installer.agents_md_path, 'r') as f:
             content = f.read()
-        assert content == custom
+        assert content.startswith('<!-- managed-by: codex-session-patcher:ctf -->\n')
+        assert content.endswith(custom)
+
+        success, message = installer.uninstall()
+        assert success, message
+        assert not os.path.exists(installer.agents_md_path)
+
+    def test_install_refuses_unmanaged_prompt(self, tmp_path):
+        from codex_session_patcher.ctf_config.installer import OpenCodeCTFInstaller
+
+        workspace = str(tmp_path / "opencode-ctf-workspace")
+        installer = OpenCodeCTFInstaller()
+        installer.workspace_dir = workspace
+        installer.agents_md_path = os.path.join(workspace, "AGENTS.md")
+        installer.config_path = os.path.join(workspace, "opencode.json")
+        installer.readme_path = os.path.join(workspace, "README.md")
+        os.makedirs(workspace)
+        with open(installer.agents_md_path, "w", encoding="utf-8") as stream:
+            stream.write("USER OWNED")
+
+        success, message = installer.install(custom_prompt="# Custom")
+
+        assert success is False
+        assert "没有本工具管理标记" in message
+        assert open(installer.agents_md_path, encoding="utf-8").read() == "USER OWNED"
 
     def test_uninstall(self, tmp_path):
         from codex_session_patcher.ctf_config.installer import OpenCodeCTFInstaller

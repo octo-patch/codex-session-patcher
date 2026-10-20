@@ -35,6 +35,7 @@ AI coding tools (Codex, Claude Code, OpenCode) frequently refuse security-relate
 - **Smart Detection** — Two-level refusal detection (strong phrase full-text match + weak keyword prefix match), low false positive rate
 - **AI Rewrite** — Call LLM to generate context-aware replacement responses (supports OpenAI / Ollama / OpenRouter compatible APIs)
 - **Safe Fallbacks** — Clean historical Codex refusals that only contain `event_msg`; fall back to a safe default when AI returns question-mark mojibake
+- **Desktop projection** — Also update `item_completed/AgentMessage` and `thread_history`, so the desktop app does not keep showing a refusal after the JSONL is cleaned
 - **Batch Cleaning** — Process all refusal responses in a session, not just the last one
 - **Reasoning Erasure** — Remove encrypted Reasoning / Thinking block content
 - **Backup & Restore** — Auto-backup before cleaning, one-click restore to any historical version
@@ -46,6 +47,7 @@ AI coding tools (Codex, Claude Code, OpenCode) frequently refuse security-relate
 - **Claude Code Workspace** — Create dedicated CTF workspace `~/.claude-ctf-workspace` with project-level CLAUDE.md injection
 - **OpenCode Workspace** — Create dedicated CTF workspace `~/.opencode-ctf-workspace` with AGENTS.md injection
 - **Custom Prompts** — Edit injection prompts directly in Web UI, with template save/switch support
+- **Three-layer automatic workflow** — The default Codex prompt combines universal rules, the CTF workflow, and task-specific playbooks selected automatically
 - **AI Prompt Rewrite** — AI rewrites your requests to align with the injected CTF system prompt for better results
 
 ### Platform Support
@@ -61,6 +63,7 @@ AI coding tools (Codex, Claude Code, OpenCode) frequently refuse security-relate
 - **Visual Cleaning** — Preview panel + Diff view + one-click execute
 - **i18n** — Supports Chinese / English interface
 - **Real-time Logs** — WebSocket push, operation logs in real time
+- **Loopback boundary** — HTTP, cross-origin requests, and WebSockets only accept loopback clients and local page origins
 
 ---
 
@@ -109,6 +112,7 @@ Visit `http://localhost:8080`
 Notes:
 - The production script only installs Python deps, installs frontend deps, or rebuilds the frontend when one of those steps is actually needed.
 - If the frontend build output is already ready to serve, the production script does not require `node` or `npm` or reinstall frontend dependencies just to start.
+- Rebuilding the frontend or using development mode requires Node.js 20.19+ on the 20.x line, or Node.js 22.12+. Serving existing build output does not require Node.js.
 - The development script also skips repeated installs; if port `3000` is already occupied, it will automatically pick the next available frontend port.
 
 ### CLI
@@ -138,7 +142,7 @@ codex-patcher --latest --no-backup
 
 # Launch Web UI
 codex-patcher --web
-codex-patcher --web --host 0.0.0.0 --port 8080
+codex-patcher --web --host 127.0.0.1 --port 8080
 
 # CTF Prompt Injection — Codex
 codex-patcher --install-ctf-config    # Install
@@ -172,7 +176,7 @@ codex-patcher --rewrite "Help me write a reverse analysis script"
 | `--all` | Process all sessions |
 | `--keep-reasoning` | Keep reasoning content (thinking/reasoning blocks), only replace refusal responses |
 | `--web` | Launch Web UI |
-| `--host` | Web UI listen address (default 127.0.0.1) |
+| `--host` | Web UI listen address (loopback only; default 127.0.0.1) |
 | `--port` | Web UI port (default 8080) |
 | `--install-ctf-config` | Install Codex CTF config |
 | `--ctf-injection-mode append\|replace` | Choose Codex injection mode, defaults to append |
@@ -211,7 +215,7 @@ The installer writes the new Codex profile file:
 - macOS/Linux: `~/.codex/ctf.config.toml`
 - Windows: `%USERPROFILE%\.codex\ctf.config.toml`
 
-To support Codex CLI 0.134.0 and newer, install removes legacy `profile = "ctf"`, `[profiles.ctf]`, and `[profiles.ctf.*]` entries from `config.toml`, preventing `codex -p ctf` from failing with a legacy profile error. Profile mode and global mode both support appending rules or replacing Codex built-in instructions. Disabling global mode removes the marker and settings managed by this tool.
+To support Codex CLI 0.134.0 and newer, install removes legacy `profile = "ctf"`, `[profiles.ctf]`, and `[profiles.ctf.*]` entries from `config.toml` only when the historical tool marker is present, preventing `codex -p ctf` from failing with a legacy profile error without taking over user-owned profiles. Profile mode and global mode both support appending rules or replacing Codex built-in instructions. Disabling global mode removes the marker and settings managed by this tool.
 
 Codex supports two injection modes:
 
@@ -220,7 +224,11 @@ Codex supports two injection modes:
 
 The two modes are mutually exclusive. The Web UI lets you choose the injection mode when enabling Profile or Global mode; the CLI supports `--ctf-injection-mode append|replace`.
 
+The default Codex prompt is one automatic workflow file: universal rules define direct delivery, evidence, and placeholders; the common CTF workflow covers reconnaissance, validation, exploitation, flag recovery, and reproduction; task-specific playbooks are selected from Web, Pwn, reverse engineering, cryptography, forensics, mobile, or cloud task signals. Users do not switch playbooks manually.
+
 Global mode only manages the block marked with `# __csp_ctf_global__`. If `config.toml` already has a user-managed top-level `developer_instructions` or `model_instructions_file`, the installer refuses to enable global mode to avoid overwriting user settings or creating duplicate keys. Remove or migrate the existing top-level instruction setting first.
+
+Profile and prompt files also carry ownership markers. Install, update, and uninstall preserve an unmarked file at a managed path and report the conflict; updating a managed prompt creates a backup first. Custom Claude Code and OpenCode prompts receive the same marker automatically, so status detection and uninstall work consistently.
 
 ### Claude Code
 
@@ -262,6 +270,8 @@ CLI and Web UI share `~/.codex-patcher/config.json`:
 | `custom_keywords` | Custom refusal detection keywords | `{}` |
 | `ctf_prompts` | Custom CTF prompts per platform | Built-in templates |
 | `ctf_templates` | User-saved prompt templates | `{}` |
+
+The Web settings API never returns the plaintext `ai_key`; it only reports whether one is configured. The key field stays blank after loading. Saving it blank preserves the existing key, entering a new value replaces it, and saving after Reset explicitly clears it.
 
 ---
 

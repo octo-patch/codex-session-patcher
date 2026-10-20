@@ -15,10 +15,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+
+from ..file_ops import require_regular_or_missing, reserve_unique_backup_path
 
 logger = logging.getLogger(__name__)
 
@@ -259,18 +260,61 @@ class OpenCodeDBAdapter:
         if not os.path.exists(self.db_path):
             raise FileNotFoundError(f"数据库不存在: {self.db_path}")
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{self.db_path}.{timestamp}.bak"
-        shutil.copy2(self.db_path, backup_path)
-        logger.info("已创建数据库备份: %s", backup_path)
-        return backup_path
+        require_regular_or_missing(self.db_path)
+        backup_path = reserve_unique_backup_path(self.db_path)
+        source = None
+        destination = None
+        try:
+            source = self._connect(readonly=True)
+            destination = sqlite3.connect(backup_path)
+            source.backup(destination)
+            result = destination.execute("PRAGMA integrity_check").fetchone()
+            if not result or result[0] != "ok":
+                raise sqlite3.DatabaseError("备份数据库完整性检查失败")
+            destination.commit()
+            logger.info("已创建数据库备份: %s", backup_path)
+            return backup_path
+        except Exception:
+            if destination is not None:
+                destination.close()
+                destination = None
+            if source is not None:
+                source.close()
+                source = None
+            try:
+                os.remove(backup_path)
+            except FileNotFoundError:
+                pass
+            raise
+        finally:
+            if destination is not None:
+                destination.close()
+            if source is not None:
+                source.close()
 
     def restore_database(self, backup_path: str) -> None:
         """从备份恢复数据库"""
         if not os.path.exists(backup_path):
             raise FileNotFoundError(f"备份文件不存在: {backup_path}")
-        shutil.copy2(backup_path, self.db_path)
-        logger.info("已从备份恢复数据库: %s", backup_path)
+        require_regular_or_missing(backup_path)
+        source = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+        try:
+            source_result = source.execute("PRAGMA integrity_check").fetchone()
+            if not source_result or source_result[0] != "ok":
+                raise sqlite3.DatabaseError("备份数据库完整性检查失败")
+
+            destination = self._connect(readonly=False)
+            try:
+                source.backup(destination)
+                destination.commit()
+                result = destination.execute("PRAGMA integrity_check").fetchone()
+                if not result or result[0] != "ok":
+                    raise sqlite3.DatabaseError("恢复后的数据库完整性检查失败")
+                logger.info("已从备份恢复数据库: %s", backup_path)
+            finally:
+                destination.close()
+        finally:
+            source.close()
 
     def list_backups(self) -> list[dict]:
         """列出所有数据库备份"""
@@ -280,7 +324,12 @@ class OpenCodeDBAdapter:
         for f in os.listdir(backup_dir):
             if f.startswith(db_name + ".") and f.endswith(".bak"):
                 full_path = os.path.join(backup_dir, f)
-                stat = os.stat(full_path)
+                try:
+                    stat = require_regular_or_missing(full_path)
+                except ValueError:
+                    continue
+                if stat is None:
+                    continue
                 backups.append({
                     'filename': f,
                     'path': full_path,

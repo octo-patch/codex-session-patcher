@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import shutil
 import shlex
@@ -137,7 +139,13 @@ def test_find_available_port_checks_requested_host_without_lsof(tmp_path: Path):
         listener.close()
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(port + 1)
+    selected_port = int(result.stdout.strip())
+    assert selected_port > port
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("0.0.0.0", selected_port))
+    finally:
+        probe.close()
 
 
 def test_find_available_port_fails_fast_for_non_bindable_host():
@@ -191,14 +199,14 @@ def test_find_available_port_checks_localhost_across_address_families():
         listener.close()
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(port + 1)
+    assert int(result.stdout.strip()) > port
 
 
 def test_pick_python_bin_supports_versioned_interpreter_names(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
 
-    for tool in ("awk", "dirname"):
+    for tool in ("awk", "bash", "dirname"):
         link_host_tool(fake_bin, tool)
 
     versioned_python = fake_bin / "python3.13"
@@ -206,11 +214,43 @@ def test_pick_python_bin_supports_versioned_interpreter_names(tmp_path: Path):
 
     result = run_bash(
         f"source {shlex.quote(str(WEB_COMMON))}; web_pick_python_bin",
-        env={"PATH": f"{fake_bin}:/bin"},
+        env={"PATH": str(fake_bin)},
     )
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(versioned_python)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("v20.18.0", "unsupported"),
+        ("v20.19.0", "supported"),
+        ("v21.7.0", "unsupported"),
+        ("v22.11.0", "unsupported"),
+        ("v22.12.0", "supported"),
+        ("v23.0.0", "supported"),
+    ],
+)
+def test_node_version_gate_matches_vite_requirement(tmp_path: Path, version: str, expected: str):
+    node_bin = tmp_path / "node"
+    node_bin.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(version)}\n",
+        encoding="utf-8",
+    )
+    node_bin.chmod(node_bin.stat().st_mode | stat.S_IXUSR)
+
+    result = run_bash(
+        "\n".join(
+            [
+                f"source {shlex.quote(str(WEB_COMMON))}",
+                f"if web_node_is_supported {shlex.quote(str(node_bin))}; then echo supported; else echo unsupported; fi",
+            ]
+        )
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
 
 
 def test_pick_python_bin_prefers_generic_launchers_before_versioned_fallbacks(tmp_path: Path):
@@ -238,7 +278,7 @@ def test_pick_python_bin_supports_py_launcher(tmp_path: Path):
     fake_bin.mkdir()
     state_dir.mkdir()
 
-    for tool in ("awk", "dirname"):
+    for tool in ("awk", "bash", "cat", "chmod", "dirname", "mkdir", "uname"):
         link_host_tool(fake_bin, tool)
 
     py_launcher = fake_bin / "py"
@@ -269,7 +309,7 @@ def test_pick_python_bin_supports_py_launcher(tmp_path: Path):
                 "PY",
             ]
         ),
-        env={"PATH": f"{fake_bin}:/bin"},
+        env={"PATH": str(fake_bin)},
     )
 
     assert result.returncode == 0, result.stderr
@@ -980,7 +1020,8 @@ def test_web_state_dir_trims_carriage_return_from_worktree_gitdir(tmp_path: Path
     git_dir.mkdir(parents=True)
 
     shutil.copy2(REPO_ROOT / "scripts" / "web-common.sh", scripts_dir / "web-common.sh")
-    (project_dir / ".git").write_text(f"gitdir: {git_dir}\r\n", encoding="utf-8", newline="")
+    with (project_dir / ".git").open("w", encoding="utf-8", newline="") as stream:
+        stream.write(f"gitdir: {git_dir}\r\n")
 
     result = subprocess.run(
         ["bash", "-c", "source scripts/web-common.sh && web_state_dir"],

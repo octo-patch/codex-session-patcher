@@ -13,8 +13,8 @@ block_cipher = None
 # 收集所有子模块
 hiddenimports = collect_submodules('codex_session_patcher')
 
-# 数据文件（如果有）
-datas = []
+# 默认提示词等包数据
+datas = collect_data_files('codex_session_patcher')
 
 a = Analysis(
     ['codex_session_patcher/cli.py'],

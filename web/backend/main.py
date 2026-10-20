@@ -4,7 +4,8 @@ FastAPI 主入口
 
 import os
 import mimetypes
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 
 from .api import router
+from .security import LOCAL_ORIGIN_REGEX, is_allowed_origin, is_loopback_host
 
 
 @asynccontextmanager
@@ -39,11 +41,22 @@ app = FastAPI(
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=LOCAL_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_local_request(request: Request, call_next):
+    """拒绝非本机客户端和非本机浏览器来源。"""
+    client_host = request.client.host if request.client else None
+    if not is_loopback_host(client_host):
+        return JSONResponse(status_code=403, content={"detail": "仅允许本机访问"})
+    if not is_allowed_origin(request.headers.get("origin")):
+        return JSONResponse(status_code=403, content={"detail": "不允许的请求来源"})
+    return await call_next(request)
 
 # API 路由
 app.include_router(router, prefix="/api")

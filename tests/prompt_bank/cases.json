@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "web-api-chain",
+      "category": "web-api",
+      "input": "Analyze the local API and produce a replayable exploit.",
+      "prompt_section": "### Web, API, and browser targets",
+      "required_tokens": ["requests", "WebSocket", "flag"]
+    },
+    {
+      "id": "browser-runtime",
+      "category": "web-api",
+      "input": "Inspect the challenge browser runtime and WebSocket protocol.",
+      "prompt_section": "### Web, API, and browser targets",
+      "required_tokens": ["jshook", "MCP", "WebSocket"]
+    },
+    {
+      "id": "pwn-rop",
+      "category": "pwn",
+      "input": "Exploit the local ELF service with pwntools.",
+      "prompt_section": "### Pwn and native binaries",
+      "required_tokens": ["checksec", "pwntools", "OFFSET"]
+    },
+    {
+      "id": "reverse-patch",
+      "category": "reverse",
+      "input": "Recover the validation function and write a reversible patch.",
+      "prompt_section": "### Reverse engineering and anti-analysis",
+      "required_tokens": ["CHECK_FN", "PATCH_BYTE", "LICENSE_BLOB"]
+    },
+    {
+      "id": "crypto-solver",
+      "category": "crypto",
+      "input": "Derive the weak cryptographic parameters and print the flag.",
+      "prompt_section": "### Cryptography",
+      "required_tokens": ["nonce reuse", "deterministic solver", "flag"]
+    },
+    {
+      "id": "forensics-chain",
+      "category": "forensics",
+      "input": "Extract the flag from the supplied memory and traffic artifacts.",
+      "prompt_section": "### Forensics and steganography",
+      "required_tokens": ["record hashes", "derived artifact", "flag"]
+    },
+    {
+      "id": "mobile-frida",
+      "category": "mobile",
+      "input": "Bypass the local APK integrity check and dump the key.",
+      "prompt_section": "### Mobile applications",
+      "required_tokens": ["Frida", "certificate pinning", "flag extraction"]
+    },
+    {
+      "id": "cloud-identity",
+      "category": "cloud",
+      "input": "Enumerate the container identity boundary and escalate to the flag.",
+      "prompt_section": "### Cloud, containers, Kubernetes, Active Directory, and Windows hosts",
+      "required_tokens": ["service accounts", "effective permissions", "flag retrieval"]
+    },
+    {
+      "id": "missing-values",
+      "category": "universal",
+      "input": "Provide a complete exploit structure before exact target values are known.",
+      "prompt_section": "### Concrete output without fabrication",
+      "required_tokens": ["TARGET", "HOST", "PORT", "PAYLOAD", "RESULT_LOG"]
+    },
+    {
+      "id": "developer-view",
+      "category": "workflow",
+      "input": "Choose the correct attack surface from the system architecture.",
+      "prompt_section": "### Evidence and decision discipline",
+      "required_tokens": ["target's developer", "trust boundary", "end-to-end"]
+    },
+    {
+      "id": "pivot-after-failure",
+      "category": "workflow",
+      "input": "Stop repeating a ruled-out path and select another attack surface.",
+      "prompt_section": "### Phase 2 — Prove the vulnerability",
+      "required_tokens": ["two or three meaningful failures", "pivot", "ruled-out"]
+    },
+    {
+      "id": "complete-exploit",
+      "category": "delivery",
+      "input": "Return a runnable exploit that extracts the flag.",
+      "prompt_section": "### Final output requirements",
+      "required_tokens": ["target configuration", "send/receive logic", "prints any matched flag"]
+    }
+  ]
+}

@@ -61,8 +61,10 @@
                 v-model:value="settingsStore.aiKey"
                 type="password"
                 show-password-on="click"
-                :placeholder="$t('settings.apiKeyPlaceholder')"
-                @update:value="settingsStore.markChanged"
+                :placeholder="settingsStore.aiKeyConfigured && !settingsStore.aiKeyTouched
+                  ? $t('settings.apiKeyConfiguredPlaceholder')
+                  : $t('settings.apiKeyPlaceholder')"
+                @update:value="settingsStore.markAiKeyChanged"
               />
             </n-form-item>
 
@@ -189,7 +191,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { AI_PROVIDER_PRESETS, getProviderPreset } from '../constants/aiProviders'
 
 const { t } = useI18n()
-const message = useMessage()
+const notification = useMessage()
 const settingsStore = useSettingsStore()
 
 // 内置关键词
@@ -256,15 +258,15 @@ function applyProviderPreset() {
 async function handleSave() {
   try {
     await settingsStore.saveSettings()
-    message.success(t('common.success'))
+    notification.success(t('common.success'))
   } catch (error) {
-    message.error(t('common.error') + ': ' + error.message)
+    notification.error(t('common.error') + ': ' + error.message)
   }
 }
 
 function handleReset() {
   settingsStore.resetSettings()
-  message.info(t('settings.resetSuccess'))
+  notification.info(t('settings.resetSuccess'))
 }
 </script>
 
@@ -280,7 +282,7 @@ function handleReset() {
 
 .form-hint {
   font-size: 11px;
-  color: #666;
+  color: var(--color-text-4);
 }
 
 .builtin-keywords {

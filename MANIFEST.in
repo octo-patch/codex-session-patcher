@@ -1,0 +1,2 @@
+recursive-include codex_session_patcher/ctf_config/prompts *.md
+recursive-include web/frontend/dist *

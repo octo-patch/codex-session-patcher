@@ -6,6 +6,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const aiEnabled = ref(false)
   const aiEndpoint = ref('')
   const aiKey = ref('')
+  const aiKeyConfigured = ref(false)
+  const aiKeyTouched = ref(false)
   const aiModel = ref('')
   const customKeywords = ref({ zh: [], en: [] })
   const mockResponse = ref('好的，我已完全理解您的需求，并将配合您完成接下来的逆向分析与代码编写工作。请提供下一步指令。')
@@ -21,7 +23,9 @@ export const useSettingsStore = defineStore('settings', () => {
       const data = await api.getSettings()
       aiEnabled.value = data.ai_enabled
       aiEndpoint.value = data.ai_endpoint
-      aiKey.value = data.ai_key
+      aiKey.value = ''
+      aiKeyConfigured.value = data.ai_key_configured === true
+      aiKeyTouched.value = false
       aiModel.value = data.ai_model
       customKeywords.value = data.custom_keywords
       mockResponse.value = data.mock_response
@@ -40,10 +44,16 @@ export const useSettingsStore = defineStore('settings', () => {
         ai_enabled: aiEnabled.value,
         ai_endpoint: aiEndpoint.value,
         ai_key: aiKey.value,
+        clear_ai_key: aiKeyTouched.value && aiKey.value === '',
         ai_model: aiModel.value,
         custom_keywords: customKeywords.value,
         mock_response: mockResponse.value
       })
+      if (aiKeyTouched.value) {
+        aiKeyConfigured.value = aiKey.value !== ''
+      }
+      aiKey.value = ''
+      aiKeyTouched.value = false
       changed.value = false
       return true
     } catch (error) {
@@ -58,6 +68,7 @@ export const useSettingsStore = defineStore('settings', () => {
     aiEnabled.value = false
     aiEndpoint.value = ''
     aiKey.value = ''
+    aiKeyTouched.value = true
     aiModel.value = ''
     customKeywords.value = { zh: [], en: [] }
     mockResponse.value = '好的，我已完全理解您的需求，并将配合您完成接下来的逆向分析与代码编写工作。请提供下一步指令。'
@@ -65,6 +76,11 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   function markChanged() {
+    changed.value = true
+  }
+
+  function markAiKeyChanged() {
+    aiKeyTouched.value = true
     changed.value = true
   }
 
@@ -87,6 +103,8 @@ export const useSettingsStore = defineStore('settings', () => {
     aiEnabled,
     aiEndpoint,
     aiKey,
+    aiKeyConfigured,
+    aiKeyTouched,
     aiModel,
     customKeywords,
     mockResponse,
@@ -99,6 +117,7 @@ export const useSettingsStore = defineStore('settings', () => {
     saveSettings,
     resetSettings,
     markChanged,
+    markAiKeyChanged,
     setShowAllSessions,
     setClaudeCodeEnabled,
     setOpencodeEnabled,

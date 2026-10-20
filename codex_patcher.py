@@ -65,7 +65,10 @@ REASONING_TYPES = ["reasoning", "thought", "thinking", "thoughts", "reasoning_co
 BACKUP_KEEP_COUNT = 5
 
 # 版本号
-VERSION = "1.1.0"
+try:
+    from codex_session_patcher import __version__ as VERSION
+except ImportError:
+    VERSION = "1.4.7"
 
 
 # =============================================================================

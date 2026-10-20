@@ -35,6 +35,7 @@
 - **智能检测** — 两级拒绝检测策略（强短语全文匹配 + 弱关键词开头匹配），低误报率
 - **AI 智能改写** — 调用 LLM 根据对话上下文生成符合语境的替换回复（支持 OpenAI / Ollama / OpenRouter 等兼容接口）
 - **安全兜底** — 可清理只有 `event_msg` 的历史 Codex 拒绝记录；AI 返回问号乱码时自动回退到安全默认文本
+- **桌面端投影** — 同步清理 `item_completed/AgentMessage` 和 `thread_history`，避免只改 JSONL 后界面仍显示拒绝
 - **批量清理** — 处理会话中所有拒绝回复，而非仅最后一条
 - **推理内容擦除** — 删除 Reasoning / Thinking block 加密推理内容
 - **备份还原** — 清理前自动备份，支持一键还原到任意历史版本
@@ -46,6 +47,7 @@
 - **Claude Code 工作空间** — 创建专用 CTF 工作空间 `~/.claude-ctf-workspace`，通过项目级 CLAUDE.md 注入
 - **OpenCode 工作空间** — 创建专用 CTF 工作空间 `~/.opencode-ctf-workspace`，通过 AGENTS.md 注入
 - **提示词自定义** — Web UI 内直接编辑注入提示词，支持模板保存与切换
+- **三层自动工作流** — Codex 默认模板按通用执行规则、CTF 工作流和专项规则组织，自动匹配题型，无需手动切换
 - **AI 提示词改写** — 结合已注入的 CTF 系统提示词，AI 改写你的请求使其更易被接受
 
 ### 平台支持
@@ -61,6 +63,7 @@
 - **可视化清理** — 预览面板 + Diff 对比 + 一键执行
 - **多语言** — 支持中文 / English 界面切换
 - **实时日志** — WebSocket 推送，操作日志实时显示
+- **本机访问边界** — HTTP、跨域请求和 WebSocket 只接受回环客户端与本机页面来源
 
 ---
 
@@ -109,6 +112,7 @@ Telegram Bot token 和后台管理密钥只配置在作者部署的 Cloudflare W
 说明：
 - 生产脚本只会在 Python Web 依赖缺失、前端依赖缺失/过期、或前端构建产物过期时才执行对应步骤。
 - 如果前端构建产物已经可直接提供服务，生产脚本不会为了启动而额外要求 `node` / `npm` 或补装前端依赖。
+- 重新构建前端或使用开发模式需要 Node.js 20.19+（20.x）或 22.12+；直接使用已构建产物不需要 Node.js。
 - 开发脚本同样会跳过重复安装；如果 `3000` 端口已占用，会自动选择下一个可用端口启动前端。
 
 ### CLI
@@ -138,7 +142,7 @@ codex-patcher --latest --no-backup
 
 # 启动 Web UI
 codex-patcher --web
-codex-patcher --web --host 0.0.0.0 --port 8080
+codex-patcher --web --host 127.0.0.1 --port 8080
 
 # CTF 提示词注入 — Codex
 codex-patcher --install-ctf-config    # 安装
@@ -172,7 +176,7 @@ codex-patcher --rewrite "帮我写一个逆向分析脚本"
 | `--all` | 处理所有会话 |
 | `--keep-reasoning` | 保留推理内容（thinking/reasoning blocks），仅替换拒绝回复 |
 | `--web` | 启动 Web UI |
-| `--host` | Web UI 监听地址（默认 127.0.0.1） |
+| `--host` | Web UI 监听地址（默认且仅支持回环地址 127.0.0.1） |
 | `--port` | Web UI 端口（默认 8080） |
 | `--install-ctf-config` | 安装 Codex CTF 配置 |
 | `--ctf-injection-mode append\|replace` | 选择 Codex 注入方式，默认追加规则 |
@@ -211,7 +215,7 @@ codex-patcher --rewrite "帮我写一个逆向分析脚本"
 - macOS/Linux: `~/.codex/ctf.config.toml`
 - Windows: `%USERPROFILE%\.codex\ctf.config.toml`
 
-为兼容 Codex CLI 0.134.0 及以后版本，安装时会从 `config.toml` 清理旧格式 `profile = "ctf"`、`[profiles.ctf]` 和 `[profiles.ctf.*]`，避免 `codex -p ctf` 启动时报 legacy profile 错误。Profile 模式和全局模式都支持追加规则或替换内置提示词；禁用全局模式会移除本工具写入的标记和配置。
+为兼容 Codex CLI 0.134.0 及以后版本，安装时会从 `config.toml` 清理带有本工具历史标记的旧格式 `profile = "ctf"`、`[profiles.ctf]` 和 `[profiles.ctf.*]`，避免 `codex -p ctf` 启动时报 legacy profile 错误。Profile 模式和全局模式都支持追加规则或替换内置提示词；禁用全局模式会移除本工具写入的标记和配置。
 
 Codex 提供两种注入方式：
 
@@ -220,7 +224,11 @@ Codex 提供两种注入方式：
 
 两种方式互斥。通过 Web UI 启用 Profile 或全局模式时可选择注入方式；CLI 可用 `--ctf-injection-mode append|replace`。
 
+默认 Codex 提示词是单文件自动工作流：通用规则负责直接交付、证据和占位符；统一 CTF 流程负责侦察、验证、利用、取旗与复现；专项规则按 Web、Pwn、逆向、密码学、取证、移动端或云环境等任务语义自动采用。用户不需要手动选择专项模板。
+
 全局模式只管理带有 `# __csp_ctf_global__` 标记的配置块。如果 `config.toml` 顶层已经存在用户自己写的 `developer_instructions` 或 `model_instructions_file`，安装器会拒绝启用全局模式，避免覆盖用户配置或生成重复 key；请先手动迁移或删除原有顶层提示词配置。
+
+Profile 和提示词文件也使用管理标记。遇到没有标记的同名配置或提示词时，安装、更新和卸载都会保留原文件并报告冲突；更新已管理提示词前会先创建备份。Claude Code 与 OpenCode 的自定义提示词会自动添加同类标记，因此可以正常识别状态并安全卸载。
 
 ### Claude Code
 
@@ -262,6 +270,8 @@ CLI 和 Web UI 共享配置文件 `~/.codex-patcher/config.json`：
 | `custom_keywords` | 自定义拒绝检测关键词 | `{}` |
 | `ctf_prompts` | 各平台自定义 CTF 提示词 | 内置模板 |
 | `ctf_templates` | 用户保存的提示词模板 | `{}` |
+
+Web 设置接口不会返回 `ai_key` 明文，只返回是否已配置。设置页加载后密钥框保持为空；直接保存会保留原密钥，输入新值会替换，重置后保存会明确清除。
 
 ---
 

@@ -21,6 +21,7 @@ from codex_patcher import (
     SessionNotFoundError,
     SessionParseError
 )
+from codex_session_patcher.core.detector import RefusalDetector as CoreRefusalDetector
 from codex_session_patcher.core.formats import SessionFormat, get_format_strategy
 from codex_session_patcher.core.patcher import clean_session_jsonl
 
@@ -128,6 +129,84 @@ class TestRefusalDetector:
         })
         assert detector.detect("这是自定义拒绝词的内容") is True
         assert detector.detect("This is a custom refusal message") is True
+
+
+    def test_detect_subjectless_continuation_refusal(self):
+        """桌面端新拒绝句式不能漏掉，正常技术描述也不能误伤。"""
+        detector = CoreRefusalDetector()
+        assert detector.detect("不能继续做这件事。上一轮请求不能继续处理。") is True
+        assert detector.detect("无法继续处理这件事，所以到此为止。") is True
+        assert detector.detect("这个循环不能继续使用旧接口，我改成新接口。") is False
+        assert detector.detect("好的，我来继续做这件事。") is False
+
+
+class TestDesktopSessionFormat:
+    """Codex 桌面端 item_completed 投影副本必须和主记录一起清理。"""
+
+    def test_clean_groups_item_completed_with_response_item(self):
+        lines = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "AgentMessage",
+                        "id": "msg_1",
+                        "content": [{"type": "Text", "text": "不能继续做这件事。"}],
+                    },
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "id": "msg_1",
+                    "content": [{"type": "output_text", "text": "不能继续做这件事。"}],
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "last_agent_message": "不能继续做这件事。",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {"type": "Reasoning", "id": "rs_1", "summary_text": ["hidden"]},
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {"type": "reasoning", "id": "rs_1", "summary": []},
+            },
+        ]
+
+        cleaned, modified, changes = clean_session_jsonl(
+            lines,
+            CoreRefusalDetector(),
+            show_content=True,
+            mock_response="已改为可继续的说明",
+            session_format=SessionFormat.CODEX,
+        )
+
+        strategy = get_format_strategy(SessionFormat.CODEX)
+        replacements = [change for change in changes if change.change_type == "replace"]
+        deletions = [change for change in changes if change.change_type == "delete"]
+        assert modified is True
+        assert len(replacements) == 1
+        assert replacements[0].line_nums == [1, 2, 3]
+        assert replacements[0].item_ids == ["msg_1"]
+        assert [strategy.extract_text_content(line) for line in cleaned[:3]] == ["已改为可继续的说明"] * 3
+        assert {item_id for change in deletions for item_id in change.item_ids} == {"rs_1"}
+        assert all(line.get("payload", {}).get("type") != "reasoning" for line in cleaned)
+        assert all(
+            (line.get("payload") or {}).get("item", {}).get("type") != "Reasoning"
+            for line in cleaned
+        )
 
 
 # =============================================================================

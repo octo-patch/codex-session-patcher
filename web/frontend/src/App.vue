@@ -131,7 +131,12 @@
         </n-tabs>
 
         <!-- 主内容区 -->
-        <n-layout has-sider class="app-content" v-show="activeTab === 'sessions'">
+        <n-layout
+          v-if="sessionsOpened"
+          v-show="activeTab === 'sessions'"
+          has-sider
+          class="app-content"
+        >
           <!-- 左侧会话列表 -->
           <n-layout-sider
             bordered
@@ -218,18 +223,11 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { darkTheme, zhCN, dateZhCN, enUS, dateEnUS, NDialogProvider } from 'naive-ui'
+import { darkTheme, zhCN, dateZhCN, enUS, dateEnUS } from 'naive-ui'
 import { SettingsOutline, MenuOutline, ListOutline, SparklesOutline, HelpCircleOutline, ChatbubblesOutline } from '@vicons/ionicons5'
-import SessionList from './components/SessionList.vue'
-import PreviewPanel from './components/PreviewPanel.vue'
-import ActionBar from './components/ActionBar.vue'
 import LogPanel from './components/LogPanel.vue'
-import PromptEnhancePanel from './components/PromptEnhancePanel.vue'
-import SettingsPanel from './components/SettingsPanel.vue'
-import HelpPanel from './components/HelpPanel.vue'
-import CooperationPanel from './components/CooperationPanel.vue'
 import LocaleSwitch from './components/LocaleSwitch.vue'
 import AdSlot from './components/AdSlot.vue'
 import { useSessionStore } from './stores/sessionStore'
@@ -237,6 +235,14 @@ import { useSettingsStore } from './stores/settingsStore'
 import { useLogStore } from './stores/logStore'
 import { useLocaleStore } from './stores/localeStore'
 import { api } from './services/api'
+
+const SessionList = defineAsyncComponent(() => import('./components/SessionList.vue'))
+const PreviewPanel = defineAsyncComponent(() => import('./components/PreviewPanel.vue'))
+const ActionBar = defineAsyncComponent(() => import('./components/ActionBar.vue'))
+const PromptEnhancePanel = defineAsyncComponent(() => import('./components/PromptEnhancePanel.vue'))
+const SettingsPanel = defineAsyncComponent(() => import('./components/SettingsPanel.vue'))
+const HelpPanel = defineAsyncComponent(() => import('./components/HelpPanel.vue'))
+const CooperationPanel = defineAsyncComponent(() => import('./components/CooperationPanel.vue'))
 
 const AD_TABS = ['enhance', 'settings', 'help', 'cooperation']
 const AD_POSITIONS = ['left', 'right']
@@ -249,6 +255,7 @@ const AD_CONFIG_URL = import.meta.env.VITE_AD_CONFIG_URL || DEFAULT_AD_CONFIG_UR
 
 const { t } = useI18n()
 const activeTab = ref('enhance')
+const sessionsOpened = ref(false)
 const sidebarCollapsed = ref(false)
 const isMobile = ref(false)
 const showSponsor = ref(false)
@@ -407,6 +414,9 @@ sessionStore.fetchSessions()
 
 // Tab 切换时加载设置
 function handleTabChange(tab) {
+  if (tab === 'sessions') {
+    sessionsOpened.value = true
+  }
   if (tab === 'settings') {
     settingsStore.loadSettings()
   }

@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=75.3.2,<77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "codex-session-patcher"
-version = "1.4.7"
+dynamic = ["version"]
 description = "AI coding session cleaner with CTF/pentest prompt injection — supports Codex, Claude Code, OpenCode"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -16,10 +20,17 @@ codex-patcher = "codex_session_patcher.cli:main"
 codex-patcher-web = "web.backend.main:run_server"
 
 [tool.setuptools.packages.find]
-include = ["codex_patcher", "codex_session_patcher", "web"]
+include = ["codex_session_patcher*", "web*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "codex_session_patcher.__version__"}
 
 [tool.setuptools.package-data]
 codex_session_patcher = ["ctf_config/prompts/*.md"]
+web = [
+    "frontend/dist/*",
+    "frontend/dist/assets/*",
+]
 
 [project.optional-dependencies]
 web = [

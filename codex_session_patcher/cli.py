@@ -7,11 +7,8 @@ from __future__ import annotations
 import os
 import sys
 import argparse
-import shutil
-from datetime import datetime
-
-import json as _json
-
+from .config import ConfigError, DEFAULT_CONFIG_FILE, load_config as load_shared_config
+from .file_ops import create_unique_backup
 from .output import safe_print
 
 print = safe_print
@@ -23,21 +20,16 @@ from .core import (
     MOCK_RESPONSE,
     OpenCodeDBAdapter,
 )
-from .core.patcher import save_session_jsonl
+from .core.patcher import publish_cleaned_codex_session, save_session_jsonl
 from .core.sqlite_adapter import DEFAULT_OPENCODE_DB
-
-DEFAULT_CONFIG_FILE = os.path.expanduser('~/.codex-patcher/config.json')
-
 
 def load_config():
     """加载 Web 端保存的配置"""
-    if os.path.exists(DEFAULT_CONFIG_FILE):
-        try:
-            with open(DEFAULT_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                return _json.load(f)
-        except Exception:
-            pass
-    return {}
+    try:
+        return load_shared_config(DEFAULT_CONFIG_FILE)
+    except ConfigError as exc:
+        print(f"配置读取失败，将使用默认设置: {exc}", file=sys.stderr)
+        return {}
 
 
 def handle_ctf_status():
@@ -431,14 +423,22 @@ def main():
             continue
 
         # 创建备份
+        backup_path = None
         if not args.no_backup:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_path = f'{session.path}.{timestamp}.bak'
-            shutil.copy2(session.path, backup_path)
+            backup_path = create_unique_backup(session.path)
             print(f'  备份: {backup_path}')
 
-        # 保存修改
-        save_session_jsonl(cleaned_lines, session.path)
+        # 保存修改。Codex 桌面端还要同步 thread_history 投影。
+        if session.format == SessionFormat.CODEX:
+            publish_cleaned_codex_session(
+                session.path,
+                cleaned_lines,
+                changes,
+                old_size=os.path.getsize(session.path),
+                backup_path=backup_path,
+            )
+        else:
+            save_session_jsonl(cleaned_lines, session.path)
         print(f'  已保存修改')
         total_modified += 1
 

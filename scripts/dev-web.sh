@@ -36,6 +36,11 @@ if ! command -v npm >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! web_node_is_supported node; then
+    echo "❌ 开发模式需要 Node.js 20.19+（20.x）或 22.12+，当前版本: $(web_node_version_string node)"
+    exit 1
+fi
+
 if web_python_deps_need_install "$PYTHON_BIN"; then
     if ! web_ensure_pip_available "$PYTHON_BIN"; then
         echo "❌ $PYTHON_BIN 缺少 pip，无法安装 Web 依赖"

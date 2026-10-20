@@ -59,6 +59,11 @@ if [ "$NEED_FRONTEND_DEPS_INSTALL" -eq 1 ] || [ "$NEED_FRONTEND_BUILD" -eq 1 ]; 
         echo "❌ npm 未安装，请先安装 npm"
         exit 1
     fi
+
+    if ! web_node_is_supported node; then
+        echo "❌ 前端构建需要 Node.js 20.19+（20.x）或 22.12+，当前版本: $(web_node_version_string node)"
+        exit 1
+    fi
 fi
 
 if [ "$NEED_FRONTEND_BUILD" -eq 0 ]; then

@@ -1,3 +1,4 @@
+<!-- managed-by: codex-session-patcher:ctf -->
 # Security Testing Mode
 
 You are Codex in a security testing environment.

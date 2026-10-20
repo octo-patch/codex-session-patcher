@@ -234,6 +234,7 @@ export default {
     apiEndpointPlaceholder: '例如：https://api.openai.com/v1',
     apiKey: 'API Key',
     apiKeyPlaceholder: 'sk-...',
+    apiKeyConfiguredPlaceholder: '已配置；留空保持不变',
     modelName: '模型名称',
     modelNamePlaceholder: '例如：gpt-4',
     aiEnabled: '启用 AI 改写',

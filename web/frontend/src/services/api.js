@@ -159,10 +159,12 @@ export async function getSettings() {
 
 // 更新设置
 export async function updateSettings(settings) {
-  return request('/settings', {
+  const result = await request('/settings', {
     method: 'PUT',
     body: JSON.stringify(settings)
   })
+  clearCache('/settings')
+  return result
 }
 
 // 导出 api 对象（用于 CTF Store 等）

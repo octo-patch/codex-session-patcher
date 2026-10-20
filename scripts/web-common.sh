@@ -97,6 +97,37 @@ print(".".join(map(str, sys.version_info[:3])))
 PY
 }
 
+web_node_is_supported() {
+    local node_bin="${1:-node}"
+    local version
+    local major
+    local minor
+
+    version="$("$node_bin" --version 2>/dev/null || true)"
+    version="${version#v}"
+    major="${version%%.*}"
+    version="${version#*.}"
+    minor="${version%%.*}"
+
+    case "$major:$minor" in
+        *[!0-9:]*|:*) return 1 ;;
+    esac
+
+    if [ "$major" -eq 20 ]; then
+        [ "$minor" -ge 19 ]
+        return
+    fi
+    if [ "$major" -eq 22 ]; then
+        [ "$minor" -ge 12 ]
+        return
+    fi
+    [ "$major" -gt 22 ]
+}
+
+web_node_version_string() {
+    "${1:-node}" --version
+}
+
 web_pick_python_bin() {
     local candidate
 

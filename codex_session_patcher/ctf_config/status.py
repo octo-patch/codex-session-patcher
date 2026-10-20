@@ -9,12 +9,26 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 CTF_MARKER = 'managed-by: codex-session-patcher:ctf'
+CTF_MARKER_COMMENT = f'<!-- {CTF_MARKER} -->'
+PROFILE_MARKER = '# Codex CTF profile managed by codex-session-patcher'
 DEFAULT_CLAUDE_CTF_WORKSPACE = os.path.expanduser("~/.claude-ctf-workspace")
 DEFAULT_OPENCODE_CTF_WORKSPACE = os.path.expanduser("~/.opencode-ctf-workspace")
 
 
 GLOBAL_MARKER = '# __csp_ctf_global__'
 DEFAULT_CODEX_PROMPT_FILE = "ctf_optimized.md"
+
+
+def has_ctf_marker(content: str) -> bool:
+    """检查提示词开头是否包含本工具的所有权标记。"""
+    return CTF_MARKER in content[:500]
+
+
+def ensure_ctf_marker(content: str) -> str:
+    """为准备落盘的提示词添加稳定的所有权标记。"""
+    if has_ctf_marker(content):
+        return content
+    return f"{CTF_MARKER_COMMENT}\n{content.lstrip(chr(10))}"
 
 
 @dataclass
@@ -113,14 +127,15 @@ def check_ctf_status() -> CTFStatus:
             with open(profile_config_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             status.config_exists = True
-            if _has_top_level_key(content, "developer_instructions"):
+            profile_managed = PROFILE_MARKER in _top_level_lines(content)
+            if profile_managed and _has_top_level_key(content, "developer_instructions"):
                 status.profile_available = True
                 status.prompt_exists = True
                 status.injection_mode = "append"
                 default_prompt_path = _default_codex_prompt_path(codex_dir)
                 if os.path.exists(default_prompt_path):
                     status.prompt_path = default_prompt_path
-            else:
+            elif profile_managed:
                 prompt_path = _get_top_level_string_value(content, "model_instructions_file")
                 if prompt_path:
                     status.profile_available = True

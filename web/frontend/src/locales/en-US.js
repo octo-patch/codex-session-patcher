@@ -234,6 +234,7 @@ export default {
     apiEndpointPlaceholder: 'e.g., https://api.openai.com/v1',
     apiKey: 'API Key',
     apiKeyPlaceholder: 'sk-...',
+    apiKeyConfiguredPlaceholder: 'Configured; leave blank to keep it',
     modelName: 'Model Name',
     modelNamePlaceholder: 'e.g., gpt-4',
     aiEnabled: 'Enable AI Rewrite',

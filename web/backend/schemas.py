@@ -121,6 +121,8 @@ class Settings(BaseModel):
     ai_enabled: bool = False
     ai_endpoint: str = ""
     ai_key: str = ""
+    ai_key_configured: bool = False
+    clear_ai_key: bool = False
     ai_model: str = ""
     custom_keywords: Dict[str, List[str]] = {"zh": [], "en": []}
     mock_response: str = DEFAULT_MOCK_RESPONSE

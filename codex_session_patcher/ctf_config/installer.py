@@ -6,10 +6,15 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
-from datetime import datetime
 from typing import Optional
 
+from ..config import load_config
+from ..file_ops import (
+    atomic_write_json,
+    atomic_write_text,
+    create_unique_backup,
+    require_regular_or_missing,
+)
 from .templates import (
     CTF_CONFIG_TEMPLATE, SECURITY_MODE_PROMPT,
     CLAUDE_CODE_SECURITY_MODE_PROMPT, CLAUDE_CODE_CTF_README,
@@ -17,9 +22,27 @@ from .templates import (
     BUILTIN_TEMPLATES,
 )
 from .status import (
-    check_ctf_status, CTFStatus, GLOBAL_MARKER, CTF_MARKER,
+    check_ctf_status, CTFStatus, GLOBAL_MARKER, CTF_MARKER, PROFILE_MARKER,
+    ensure_ctf_marker, has_ctf_marker,
     DEFAULT_CLAUDE_CTF_WORKSPACE, DEFAULT_OPENCODE_CTF_WORKSPACE,
 )
+
+
+def _write_workspace_prompt(path: str, content: str) -> tuple[str, Optional[str]]:
+    """安全写入专用工作空间提示词，并拒绝接管无标记文件。"""
+    managed_content = ensure_ctf_marker(content)
+    backup_path = None
+    if os.path.exists(path):
+        require_regular_or_missing(path)
+        with open(path, 'r', encoding='utf-8') as f:
+            actual = f.read()
+        if not has_ctf_marker(actual):
+            raise ValueError(f"提示词文件没有本工具管理标记，已保留: {path}")
+        if actual == managed_content:
+            return managed_content, None
+        backup_path = create_unique_backup(path)
+    atomic_write_text(path, managed_content)
+    return managed_content, backup_path
 
 
 class CTFConfigInstaller:
@@ -37,23 +60,22 @@ class CTFConfigInstaller:
 
     def _get_prompt_file(self) -> str:
         """从用户配置获取当前选中的模板文件名，没有则返回默认"""
-        try:
-            from ..config_manager import ConfigManager
-            config = ConfigManager().load_config()
-            return config.get('ctf_prompts', {}).get('codex', {}).get('file') or self.DEFAULT_PROMPT_FILE
-        except Exception:
-            return self.DEFAULT_PROMPT_FILE
+        config = load_config()
+        filename = config.get('ctf_prompts', {}).get('codex', {}).get('file') or self.DEFAULT_PROMPT_FILE
+        if not isinstance(filename, str):
+            raise ValueError("Codex 提示词文件名必须是字符串")
+        if os.path.basename(filename) != filename or not filename.endswith('.md'):
+            raise ValueError("Codex 提示词文件名必须是 prompts 目录内的 .md 文件")
+        return filename
 
     def _get_prompt_content(self) -> str:
         """从用户配置获取当前选中的模板内容，没有则使用默认"""
-        try:
-            from ..config_manager import ConfigManager
-            config = ConfigManager().load_config()
-            saved = config.get('ctf_prompts', {}).get('codex', {}).get('prompt')
-            if saved:
-                return saved
-        except Exception:
-            pass
+        config = load_config()
+        saved = config.get('ctf_prompts', {}).get('codex', {}).get('prompt')
+        if saved:
+            if not isinstance(saved, str):
+                raise ValueError("Codex 提示词内容必须是字符串")
+            return saved
         # 使用默认模板
         from .templates import BUILTIN_TEMPLATES
         for tpl in BUILTIN_TEMPLATES.get('codex', []):
@@ -67,6 +89,151 @@ class CTFConfigInstaller:
         if mode not in {self.INJECTION_MODE_APPEND, self.INJECTION_MODE_REPLACE}:
             raise ValueError("injection_mode 只支持 append 或 replace")
         return mode
+
+    def _read_regular_text(self, path: str) -> str:
+        """读取已确认是普通文件的 UTF-8 文本。"""
+        require_regular_or_missing(path)
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def _profile_is_managed(self, content: Optional[str] = None) -> bool:
+        """判断新版 Profile 文件是否带有本工具标记。"""
+        if content is None:
+            if not os.path.exists(self.profile_config_path):
+                return False
+            content = self._read_regular_text(self.profile_config_path)
+        return PROFILE_MARKER in content.splitlines()
+
+    def _global_is_managed(self, content: Optional[str] = None) -> bool:
+        """判断全局配置是否包含本工具管理块。"""
+        if content is None:
+            if not os.path.exists(self.config_path):
+                return False
+            content = self._read_regular_text(self.config_path)
+        return GLOBAL_MARKER in content
+
+    def _validate_profile_installable(self) -> None:
+        """安装前拒绝接管用户已有的 Profile 提示词键。"""
+        if not os.path.exists(self.profile_config_path):
+            return
+        content = self._read_regular_text(self.profile_config_path)
+        if self._profile_is_managed(content):
+            return
+        key = self._find_unmanaged_top_level_instruction_key(content.splitlines())
+        if key:
+            raise ValueError(
+                f"ctf.config.toml 顶层已有未受管理的 {key}，为避免覆盖用户配置，已停止安装"
+            )
+
+    def _validate_profile_uninstallable(self) -> None:
+        """卸载前拒绝修改没有管理标记的 Profile 提示词键。"""
+        if not os.path.exists(self.profile_config_path):
+            return
+        content = self._read_regular_text(self.profile_config_path)
+        if self._profile_is_managed(content):
+            return
+        key = self._find_unmanaged_top_level_instruction_key(content.splitlines())
+        if key:
+            raise ValueError(
+                f"ctf.config.toml 顶层 {key} 没有本工具管理标记，已保留文件"
+            )
+
+    def _validate_legacy_profile_installable(self) -> None:
+        """拒绝迁移或清理没有历史管理标记的旧版 ctf profile。"""
+        if not os.path.exists(self.config_path):
+            return
+        lines = self._read_regular_text(self.config_path).splitlines(keepends=True)
+        has_legacy_profile = any(line.strip() == '[profiles.ctf]' for line in lines)
+        if has_legacy_profile and not self._legacy_profile_is_managed(lines):
+            raise ValueError(
+                "config.toml 中存在没有本工具历史标记的 [profiles.ctf]，已保留用户配置并停止安装"
+            )
+
+    def _ensure_profile_marker(self, content: str) -> str:
+        """确保新版 Profile 文件包含唯一的所有权标记。"""
+        if self._profile_is_managed(content):
+            return content
+        if content:
+            return f"{PROFILE_MARKER}\n{content.lstrip(chr(10))}"
+        return f"{PROFILE_MARKER}\n"
+
+    def _extract_embedded_instructions(self, content: str) -> Optional[str]:
+        """读取本工具生成的多行 developer_instructions 内容。"""
+        match = re.search(
+            r'(?ms)^\s*developer_instructions\s*=\s*"""\s*\n?(.*?)\n?\s*"""',
+            content,
+        )
+        if not match:
+            return None
+        return match.group(1).replace('\\"\\"\\"', '"""').replace('\\\\', '\\')
+
+    def _managed_config_owns_legacy_prompt(self, prompt_path: str, actual: str) -> bool:
+        """识别升级前已由受管理配置引用、但尚无文件标记的提示词。"""
+        contents = []
+        if os.path.exists(self.profile_config_path):
+            profile_content = self._read_regular_text(self.profile_config_path)
+            if self._profile_is_managed(profile_content):
+                contents.append(profile_content)
+        if os.path.exists(self.config_path):
+            global_content = self._read_regular_text(self.config_path)
+            if self._global_is_managed(global_content):
+                contents.append(global_content)
+
+        if not contents:
+            return False
+
+        absolute_prompt = os.path.abspath(prompt_path)
+        expected = {self._get_prompt_content().strip()}
+        for template in BUILTIN_TEMPLATES.get('codex', []):
+            prompt = template.get('prompt')
+            if isinstance(prompt, str):
+                expected.add(prompt.strip())
+                lines = prompt.splitlines()
+                if lines and CTF_MARKER in lines[0]:
+                    expected.add('\n'.join(lines[1:]).lstrip().strip())
+
+        for content in contents:
+            embedded = self._extract_embedded_instructions(content)
+            if embedded is not None:
+                expected.add(embedded.strip())
+            match = re.search(r'(?m)^\s*model_instructions_file\s*=\s*"([^"]+)"', content)
+            if match and os.path.abspath(os.path.expanduser(match.group(1))) == absolute_prompt:
+                return True
+
+        return actual.strip() in expected
+
+    def _validate_prompt_target(self, prompt_path: str) -> None:
+        """拒绝覆盖无法确认由本工具管理的同名提示词。"""
+        if not os.path.exists(prompt_path):
+            return
+        actual = self._read_regular_text(prompt_path)
+        if has_ctf_marker(actual):
+            return
+        if self._managed_config_owns_legacy_prompt(prompt_path, actual):
+            return
+        raise ValueError(f"提示词文件没有本工具管理标记，已保留: {prompt_path}")
+
+    def _write_managed_prompt(
+        self,
+        prompt_path: str,
+        prompt_content: str,
+        *,
+        already_validated: bool = False,
+    ) -> tuple[str, Optional[str]]:
+        """验证所有权，必要时备份并写入带标记的提示词。"""
+        managed_content = ensure_ctf_marker(prompt_content)
+        if not already_validated:
+            self._validate_prompt_target(prompt_path)
+
+        backup_path = None
+        if os.path.exists(prompt_path):
+            actual = self._read_regular_text(prompt_path)
+            if actual == managed_content:
+                return managed_content, None
+            backup_path = create_unique_backup(prompt_path)
+
+        atomic_write_text(prompt_path, managed_content)
+        return managed_content, backup_path
 
     def install(self, custom_prompt: str = None, injection_mode: str = INJECTION_MODE_APPEND) -> tuple[bool, str]:
         """
@@ -83,22 +250,18 @@ class CTFConfigInstaller:
             injection_mode = self._normalize_injection_mode(injection_mode)
             details = []
 
-            # 1. 先禁用 Global 模式（如果已启用）
-            status = check_ctf_status()
-            if status.global_installed:
-                success, msg = self.uninstall_global()
-                if success:
-                    details.append("✓ 已自动禁用全局模式")
-
-            # 2. 确定 prompt 文件名和内容
+            # 1. 确定目标并在任何修改前完成所有权预检
             prompt_file = self._get_prompt_file()
             prompt_path = os.path.join(self.prompts_dir, prompt_file)
-            prompt_content = custom_prompt or self._get_prompt_content()
+            prompt_content = ensure_ctf_marker(custom_prompt or self._get_prompt_content())
+            self._validate_profile_installable()
+            self._validate_legacy_profile_installable()
+            self._validate_prompt_target(prompt_path)
 
-            # 3. 确保 prompts 目录存在
+            # 2. 确保 prompts 目录存在
             os.makedirs(self.prompts_dir, exist_ok=True)
 
-            # 4. 备份现有配置（如果存在）
+            # 3. 在模式切换前备份现有配置
             backup_paths = []
             if os.path.exists(self.config_path):
                 backup_path = self._backup_config(self.config_path)
@@ -109,9 +272,20 @@ class CTFConfigInstaller:
                 if backup_path:
                     backup_paths.append(backup_path)
 
-            # 5. 写入 prompt 文件
-            with open(prompt_path, 'w', encoding='utf-8') as f:
-                f.write(prompt_content)
+            # 4. 先禁用 Global 模式；失败时不得继续写入 Profile
+            status = check_ctf_status()
+            if status.global_installed:
+                success, msg = self.uninstall_global()
+                if not success:
+                    return False, f"安装失败，无法禁用全局模式: {msg}"
+                details.append("✓ 已自动禁用全局模式")
+
+            # 5. 写入受管理 prompt 文件
+            prompt_content, prompt_backup = self._write_managed_prompt(
+                prompt_path, prompt_content, already_validated=True
+            )
+            if prompt_backup:
+                backup_paths.append(prompt_backup)
 
             # 6. 写入新版 profile 配置，并清理旧版 profile 配置
             profile_added = self._update_config(prompt_content, prompt_file, injection_mode)
@@ -145,15 +319,15 @@ class CTFConfigInstaller:
         try:
             details = []
 
-            # 1. 删除 prompt 文件（仅当 Global 模式未启用时）
+            # 在删除任何文件前确认 Profile 所有权。
+            self._validate_profile_uninstallable()
+
+            # 1. 删除本工具当前管理的 prompt 文件（仅当 Global 模式未启用时）
             status = check_ctf_status()
             if not status.global_installed:
-                # 删除所有由本工具写入的 prompt 文件
-                for f in os.listdir(self.prompts_dir) if os.path.exists(self.prompts_dir) else []:
-                    if f.endswith('.md'):
-                        fp = os.path.join(self.prompts_dir, f)
-                        os.remove(fp)
-                        details.append(f"✓ 已删除提示词文件: {fp}")
+                prompt_message = self._remove_current_managed_prompt()
+                if prompt_message:
+                    details.append(prompt_message)
 
             # 2. 移除新版 profile 文件和旧版 profile 配置
             removed = self._remove_ctf_profile()
@@ -174,15 +348,7 @@ class CTFConfigInstaller:
         target_path = path or self.config_path
         if not os.path.exists(target_path):
             return None
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{target_path}.bak-{timestamp}"
-
-        try:
-            shutil.copy2(target_path, backup_path)
-            return backup_path
-        except Exception:
-            return None
+        return create_unique_backup(target_path)
 
     def _update_config(
         self,
@@ -211,8 +377,7 @@ class CTFConfigInstaller:
             profile_content = self._upsert_developer_instructions(profile_content, instructions)
         else:
             profile_content = self._upsert_model_instructions_file(profile_content, filename)
-        with open(self.profile_config_path, 'w', encoding='utf-8') as f:
-            f.write(profile_content)
+        atomic_write_text(self.profile_config_path, profile_content)
 
         self._remove_legacy_ctf_entries()
 
@@ -221,8 +386,8 @@ class CTFConfigInstaller:
     def _read_profile_config_source(self, prompt_content: str) -> str:
         """读取新版 profile 文件；若不存在，则从旧 [profiles.ctf] 迁移内容。"""
         if os.path.exists(self.profile_config_path):
-            with open(self.profile_config_path, 'r', encoding='utf-8') as f:
-                return f.read()
+            content = self._read_regular_text(self.profile_config_path)
+            return self._ensure_profile_marker(content)
 
         legacy_lines = self._read_legacy_ctf_profile_body()
         if legacy_lines is not None:
@@ -236,8 +401,9 @@ class CTFConfigInstaller:
         if not os.path.exists(self.config_path):
             return None
 
-        with open(self.config_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        lines = self._read_regular_text(self.config_path).splitlines(keepends=True)
+        if not self._legacy_profile_is_managed(lines):
+            return None
 
         body = []
         found = False
@@ -270,6 +436,7 @@ class CTFConfigInstaller:
 
     def _upsert_developer_instructions(self, content: str, prompt_content: str) -> str:
         """只更新 profile 顶层 developer_instructions，保留其他设置。"""
+        content = self._ensure_profile_marker(content)
         escaped_prompt = self._escape_multiline_basic_string(prompt_content)
         target_lines = ['developer_instructions = """\n', escaped_prompt, '\n"""\n']
         lines = content.splitlines(keepends=True)
@@ -285,6 +452,15 @@ class CTFConfigInstaller:
 
         top_level = lines[:section_start]
         rest = lines[section_start:]
+        managed = any(line.strip() == PROFILE_MARKER for line in top_level)
+        if not managed:
+            key = self._find_unmanaged_top_level_instruction_key(top_level)
+            if key:
+                raise ValueError(
+                    f"ctf.config.toml 顶层 {key} 没有本工具管理标记，已保留文件"
+                )
+            return False
+
         new_top_level = []
         replaced = False
         index = 0
@@ -314,18 +490,12 @@ class CTFConfigInstaller:
         if rest and new_top_level and new_top_level[-1].strip():
             new_top_level.append('\n')
 
-        new_rest = []
-        for line in rest:
-            if re.match(r'^\s*model_instructions_file\s*=', line):
-                continue
-            new_rest.append(line)
-
         if not replaced:
             if new_top_level and not new_top_level[-1].endswith('\n'):
                 new_top_level[-1] += '\n'
             new_top_level.extend(target_lines)
 
-        profile_content = ''.join(new_top_level + new_rest)
+        profile_content = ''.join(new_top_level + rest)
         if not profile_content.endswith('\n'):
             profile_content += '\n'
 
@@ -333,6 +503,7 @@ class CTFConfigInstaller:
 
     def _upsert_model_instructions_file(self, content: str, prompt_file: str) -> str:
         """只更新 profile 顶层 model_instructions_file，保留其他设置。"""
+        content = self._ensure_profile_marker(content)
         target_line = f'model_instructions_file = "~/.codex/prompts/{prompt_file}"\n'
         lines = content.splitlines(keepends=True)
         if not lines:
@@ -392,26 +563,119 @@ class CTFConfigInstaller:
         return value.replace('\\', '\\\\').replace('"""', '\\"\\"\\"')
 
     def _remove_ctf_profile(self) -> bool:
-        """移除新版 CTF profile 文件和旧版 profile 配置
+        """移除新版 Profile 顶层提示词配置和旧版 profile 配置。
 
         Returns:
             bool: 是否移除了 profile
         """
-        removed = False
-
-        if os.path.exists(self.profile_config_path):
-            os.remove(self.profile_config_path)
-            removed = True
+        removed = self._remove_profile_instruction_keys()
 
         return self._remove_legacy_ctf_entries() or removed
+
+    def _remove_profile_instruction_keys(self) -> bool:
+        """只移除 Profile 顶层提示词键，保留用户的其他设置。"""
+        if not os.path.exists(self.profile_config_path):
+            return False
+
+        require_regular_or_missing(self.profile_config_path)
+        with open(self.profile_config_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        section_start = len(lines)
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('[') and not stripped.startswith('#'):
+                section_start = index
+                break
+
+        top_level = lines[:section_start]
+        rest = lines[section_start:]
+        new_top_level = []
+        removed = False
+        index = 0
+        while index < len(top_level):
+            line = top_level[index]
+            stripped = line.strip()
+            if stripped == PROFILE_MARKER:
+                removed = True
+                index += 1
+                continue
+            if re.match(r'^\s*model_instructions_file\s*=', line):
+                removed = True
+                index += 1
+                continue
+            if re.match(r'^\s*developer_instructions\s*=', line):
+                removed = True
+                quote_count = line.count('"""')
+                index += 1
+                while quote_count < 2 and index < len(top_level):
+                    quote_count += top_level[index].count('"""')
+                    index += 1
+                continue
+            new_top_level.append(line)
+            index += 1
+
+        if not removed:
+            return False
+
+        remaining = ''.join(new_top_level + rest).strip()
+        if remaining:
+            atomic_write_text(self.profile_config_path, remaining + '\n')
+        else:
+            os.remove(self.profile_config_path)
+        return True
+
+    def _remove_current_managed_prompt(self) -> Optional[str]:
+        """删除当前配置记录且内容仍匹配的提示词，保留未知文件。"""
+        filename = self._get_prompt_file()
+        prompt_path = os.path.abspath(os.path.join(self.prompts_dir, filename))
+        prompts_dir = os.path.abspath(self.prompts_dir)
+        if os.path.dirname(prompt_path) != prompts_dir or not os.path.exists(prompt_path):
+            return None
+
+        actual_content = self._read_regular_text(prompt_path)
+        marked = has_ctf_marker(actual_content)
+        legacy_managed = self._managed_config_owns_legacy_prompt(prompt_path, actual_content)
+        if not marked and not legacy_managed:
+            return f"⚠ 提示词文件没有本工具管理标记，已保留: {prompt_path}"
+        if marked:
+            os.remove(prompt_path)
+            return f"✓ 已删除提示词文件: {prompt_path}"
+
+        actual = actual_content.strip()
+
+        expected = {ensure_ctf_marker(self._get_prompt_content()).strip()}
+        for template in BUILTIN_TEMPLATES.get('codex', []):
+            prompt = template.get('prompt')
+            if isinstance(prompt, str):
+                expected.add(ensure_ctf_marker(prompt).strip())
+
+        if os.path.exists(self.profile_config_path):
+            require_regular_or_missing(self.profile_config_path)
+            with open(self.profile_config_path, 'r', encoding='utf-8') as f:
+                profile_content = f.read()
+            match = re.search(
+                r'(?ms)^\s*developer_instructions\s*=\s*"""\s*\n?(.*?)\n?\s*"""',
+                profile_content,
+            )
+            if match:
+                embedded = match.group(1).replace('\\"\\"\\"', '"""').replace('\\\\', '\\')
+                expected.add(embedded.strip())
+
+        if actual not in expected:
+            return f"⚠ 提示词文件已被外部修改，已保留: {prompt_path}"
+
+        os.remove(prompt_path)
+        return f"✓ 已删除提示词文件: {prompt_path}"
 
     def _remove_legacy_ctf_entries(self) -> bool:
         """从 base config.toml 移除 Codex 0.134.0+ 不再接受的旧 profile 写法。"""
         if not os.path.exists(self.config_path):
             return False
 
-        with open(self.config_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        lines = self._read_regular_text(self.config_path).splitlines(keepends=True)
+        if not self._legacy_profile_is_managed(lines):
+            return False
 
         new_lines = []
         removed = False
@@ -450,10 +714,20 @@ class CTFConfigInstaller:
         while new_lines and not new_lines[0].strip():
             new_lines.pop(0)
 
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+        atomic_write_text(self.config_path, ''.join(new_lines))
 
         return removed
+
+    def _legacy_profile_is_managed(self, lines: list[str]) -> bool:
+        """旧版 profile 只有带历史工具标记时才允许迁移或删除。"""
+        for index, line in enumerate(lines):
+            if line.strip() != '[profiles.ctf]':
+                continue
+            marker_index = index - 1
+            while marker_index >= 0 and not lines[marker_index].strip():
+                marker_index -= 1
+            return marker_index >= 0 and 'codex-session-patcher' in lines[marker_index]
+        return False
 
     def install_global(self, injection_mode: str = INJECTION_MODE_APPEND) -> tuple[bool, str]:
         """
@@ -480,28 +754,34 @@ class CTFConfigInstaller:
                     "为避免覆盖你的配置或生成重复 key，请先手动迁移或删除该配置。"
                 )
 
-            # 2. 确定模板内容
+            # 2. 确定目标并在任何修改前完成所有权预检
             prompt_file = self._get_prompt_file()
             prompt_path = os.path.join(self.prompts_dir, prompt_file)
+            prompt_content = ensure_ctf_marker(self._get_prompt_content())
+            self._validate_profile_uninstallable()
+            self._validate_legacy_profile_installable()
+            self._validate_prompt_target(prompt_path)
 
-            # 3. 先卸载 Profile 模式，包括旧版 [profiles.ctf] 写法
+            # 3. 在任何配置变化前备份 base/profile 配置
+            for path in (self.config_path, self.profile_config_path):
+                if os.path.exists(path):
+                    backup_path = self._backup_config(path)
+                    if backup_path:
+                        details.append(f"✓ 已备份原配置到: {backup_path}")
+
+            # 4. 先禁用 Profile 模式，包括旧版 [profiles.ctf] 写法
             removed = self._remove_ctf_profile()
             if removed:
                 details.append("✓ 已自动禁用 Profile 模式")
 
-            # 4. 确保 prompts 目录存在，写入 prompt 文件
+            # 5. 确保 prompts 目录存在，写入 prompt 文件
             os.makedirs(self.prompts_dir, exist_ok=True)
-            prompt_content = self._get_prompt_content()
-            with open(prompt_path, 'w', encoding='utf-8') as f:
-                f.write(prompt_content)
+            prompt_content, prompt_backup = self._write_managed_prompt(
+                prompt_path, prompt_content, already_validated=True
+            )
+            if prompt_backup:
+                details.append(f"✓ 已备份原提示词到: {prompt_backup}")
             details.append(f"✓ 已写入安全测试提示词: {prompt_path}")
-
-            # 5. 备份 config.toml
-            backup_path = None
-            if os.path.exists(self.config_path):
-                backup_path = self._backup_config()
-                if backup_path:
-                    details.append(f"✓ 已备份原配置到: {backup_path}")
 
             # 6. 读取现有配置
             existing_content = ""
@@ -525,8 +805,7 @@ class CTFConfigInstaller:
             new_content = new_content.strip() + '\n'
 
             os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
+            atomic_write_text(self.config_path, new_content)
 
             details.append(f"✓ 配置文件: {self.config_path}")
             details.append("⚠ 所有新 Codex 会话将自动启用安全测试上下文")
@@ -575,8 +854,7 @@ class CTFConfigInstaller:
             while new_lines and not new_lines[0].strip():
                 new_lines.pop(0)
 
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(new_lines).strip() + '\n')
+            atomic_write_text(self.config_path, '\n'.join(new_lines).strip() + '\n')
 
             details = []
             details.append(f"✓ 已从配置移除全局注入: {self.config_path}")
@@ -613,8 +891,7 @@ class CTFConfigInstaller:
             injection_mode,
         )
         new_content = '\n'.join(lines).strip() + '\n'
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
+        atomic_write_text(self.config_path, new_content)
 
         return True
 
@@ -729,14 +1006,16 @@ class ClaudeCodeCTFInstaller:
             details.append(f"✓ 已创建工作空间: {self.workspace_dir}")
 
             # 2. 写入 .claude/CLAUDE.md
-            prompt_content = custom_prompt or CLAUDE_CODE_SECURITY_MODE_PROMPT
-            with open(self.prompt_path, 'w', encoding='utf-8') as f:
-                f.write(prompt_content)
+            prompt_content, prompt_backup = _write_workspace_prompt(
+                self.prompt_path,
+                custom_prompt or CLAUDE_CODE_SECURITY_MODE_PROMPT,
+            )
             details.append(f"✓ 已创建 CLAUDE.md: {self.prompt_path}")
+            if prompt_backup:
+                details.append(f"✓ 已备份原 CLAUDE.md 到: {prompt_backup}")
 
             # 3. 写入 README
-            with open(self.readme_path, 'w', encoding='utf-8') as f:
-                f.write(CLAUDE_CODE_CTF_README)
+            atomic_write_text(self.readme_path, CLAUDE_CODE_CTF_README)
             details.append(f"✓ 已创建 README: {self.readme_path}")
 
             # 4. 可选：注入权限
@@ -765,6 +1044,7 @@ class ClaudeCodeCTFInstaller:
             # 1. 删除 .claude/CLAUDE.md（验证标记）
             if os.path.exists(self.prompt_path):
                 try:
+                    require_regular_or_missing(self.prompt_path)
                     with open(self.prompt_path, 'r', encoding='utf-8') as f:
                         content = f.read(500)
                     if CTF_MARKER in content:
@@ -772,14 +1052,19 @@ class ClaudeCodeCTFInstaller:
                         details.append(f"✓ 已删除 CLAUDE.md: {self.prompt_path}")
                     else:
                         return False, "CLAUDE.md 不是由本工具创建的，跳过删除"
-                except Exception:
-                    os.remove(self.prompt_path)
-                    details.append(f"✓ 已删除 CLAUDE.md: {self.prompt_path}")
+                except Exception as exc:
+                    return False, f"无法验证 CLAUDE.md，已保留文件: {exc}"
 
-            # 2. 删除 README（如果存在）
+            # 2. 只删除内容仍与本工具模板一致的 README
             if os.path.exists(self.readme_path):
-                os.remove(self.readme_path)
-                details.append(f"✓ 已删除 README: {self.readme_path}")
+                require_regular_or_missing(self.readme_path)
+                with open(self.readme_path, 'r', encoding='utf-8') as f:
+                    readme_content = f.read()
+                if readme_content == CLAUDE_CODE_CTF_README:
+                    os.remove(self.readme_path)
+                    details.append(f"✓ 已删除 README: {self.readme_path}")
+                else:
+                    details.append(f"⚠ README 已被修改，已保留: {self.readme_path}")
 
             # 3. 尝试清理空目录（不删除用户自建的文件）
             try:
@@ -812,8 +1097,8 @@ class ClaudeCodeCTFInstaller:
             try:
                 with open(self.settings_local, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise ValueError(f"无法读取 Claude Code 权限配置: {exc}") from exc
 
         permissions = data.setdefault("permissions", {})
         allow = permissions.setdefault("allow", [])
@@ -830,8 +1115,7 @@ class ClaudeCodeCTFInstaller:
         allow.append(marker)
         allow.append("Bash(*)")
 
-        with open(self.settings_local, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        atomic_write_json(self.settings_local, data)
 
     def _remove_permissions(self):
         """从 settings.local.json 移除注入的权限"""
@@ -858,22 +1142,13 @@ class ClaudeCodeCTFInstaller:
         if "Bash(*)" in allow:
             allow.remove("Bash(*)")
 
-        with open(self.settings_local, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        atomic_write_json(self.settings_local, data)
 
     def _backup_settings(self) -> Optional[str]:
         """备份 settings.local.json"""
         if not os.path.exists(self.settings_local):
             return None
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{self.settings_local}.ctf-backup-{timestamp}"
-
-        try:
-            shutil.copy2(self.settings_local, backup_path)
-            return backup_path
-        except Exception:
-            return None
+        return create_unique_backup(self.settings_local)
 
     def get_status(self) -> CTFStatus:
         """获取当前配置状态"""
@@ -907,19 +1182,20 @@ class OpenCodeCTFInstaller:
             details.append(f"✓ 已创建工作空间: {self.workspace_dir}")
 
             # 2. 写入 AGENTS.md
-            prompt_content = custom_prompt or OPENCODE_SECURITY_MODE_PROMPT
-            with open(self.agents_md_path, 'w', encoding='utf-8') as f:
-                f.write(prompt_content)
+            prompt_content, prompt_backup = _write_workspace_prompt(
+                self.agents_md_path,
+                custom_prompt or OPENCODE_SECURITY_MODE_PROMPT,
+            )
             details.append(f"✓ 已创建 AGENTS.md: {self.agents_md_path}")
+            if prompt_backup:
+                details.append(f"✓ 已备份原 AGENTS.md 到: {prompt_backup}")
 
             # 3. 写入 opencode.json
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                f.write(OPENCODE_CTF_CONFIG)
+            atomic_write_text(self.config_path, OPENCODE_CTF_CONFIG)
             details.append(f"✓ 已创建 opencode.json: {self.config_path}")
 
             # 4. 写入 README
-            with open(self.readme_path, 'w', encoding='utf-8') as f:
-                f.write(OPENCODE_CTF_README)
+            atomic_write_text(self.readme_path, OPENCODE_CTF_README)
             details.append(f"✓ 已创建 README: {self.readme_path}")
 
             details.append("")
@@ -943,6 +1219,7 @@ class OpenCodeCTFInstaller:
             # 1. 删除 AGENTS.md（验证标记）
             if os.path.exists(self.agents_md_path):
                 try:
+                    require_regular_or_missing(self.agents_md_path)
                     with open(self.agents_md_path, 'r', encoding='utf-8') as f:
                         content = f.read(500)
                     if CTF_MARKER in content:
@@ -950,19 +1227,30 @@ class OpenCodeCTFInstaller:
                         details.append(f"✓ 已删除 AGENTS.md: {self.agents_md_path}")
                     else:
                         return False, "AGENTS.md 不是由本工具创建的，跳过删除"
-                except Exception:
-                    os.remove(self.agents_md_path)
-                    details.append(f"✓ 已删除 AGENTS.md: {self.agents_md_path}")
+                except Exception as exc:
+                    return False, f"无法验证 AGENTS.md，已保留文件: {exc}"
 
-            # 2. 删除 opencode.json
+            # 2. 只删除内容仍与本工具模板一致的 opencode.json
             if os.path.exists(self.config_path):
-                os.remove(self.config_path)
-                details.append(f"✓ 已删除 opencode.json: {self.config_path}")
+                require_regular_or_missing(self.config_path)
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    config_content = f.read()
+                if config_content == OPENCODE_CTF_CONFIG:
+                    os.remove(self.config_path)
+                    details.append(f"✓ 已删除 opencode.json: {self.config_path}")
+                else:
+                    details.append(f"⚠ opencode.json 已被修改，已保留: {self.config_path}")
 
-            # 3. 删除 README
+            # 3. 只删除内容仍与本工具模板一致的 README
             if os.path.exists(self.readme_path):
-                os.remove(self.readme_path)
-                details.append(f"✓ 已删除 README: {self.readme_path}")
+                require_regular_or_missing(self.readme_path)
+                with open(self.readme_path, 'r', encoding='utf-8') as f:
+                    readme_content = f.read()
+                if readme_content == OPENCODE_CTF_README:
+                    os.remove(self.readme_path)
+                    details.append(f"✓ 已删除 README: {self.readme_path}")
+                else:
+                    details.append(f"⚠ README 已被修改，已保留: {self.readme_path}")
 
             # 4. 尝试清理空目录
             try:

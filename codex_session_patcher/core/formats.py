@@ -49,29 +49,94 @@ class FormatStrategy(ABC):
         """
         return msg, 0
 
+    def message_item_id(self, msg: Dict[str, Any]) -> str:
+        """助手消息在桌面端投影里的 item id。没有稳定 id 时返回空字符串。"""
+        return ""
+
+    def reasoning_item_id(self, msg: Dict[str, Any]) -> str:
+        """推理记录的 item id。没有稳定 id 时返回空字符串。"""
+        return ""
+
 
 # ─── Codex 策略 ───────────────────────────────────────────────────────────────
 
 class CodexFormatStrategy(FormatStrategy):
-    """Codex CLI 格式：response_item + payload 包装"""
+    """Codex CLI / 桌面端格式：response_item + payload，以及 item_completed 投影副本。"""
+
+    _TEXT_TYPES = ("output_text", "text", "Text")
+
+    def _completed_item(self, msg: Dict[str, Any]):
+        if msg.get("type") != "event_msg":
+            return None
+        payload = msg.get("payload") or {}
+        if payload.get("type") != "item_completed":
+            return None
+        item = payload.get("item")
+        return item if isinstance(item, dict) else None
+
+    def message_item_id(self, msg: Dict[str, Any]) -> str:
+        item = self._completed_item(msg)
+        if item and item.get("type") == "AgentMessage":
+            return str(item.get("id") or "")
+        if msg.get("type") == "response_item":
+            payload = msg.get("payload") or {}
+            if payload.get("type") == "message" and payload.get("role") == "assistant":
+                return str(payload.get("id") or "")
+        return ""
+
+    def reasoning_item_id(self, msg: Dict[str, Any]) -> str:
+        item = self._completed_item(msg)
+        if item and item.get("type") == "Reasoning":
+            return str(item.get("id") or "")
+        if msg.get("type") == "response_item":
+            payload = msg.get("payload") or {}
+            if payload.get("type") == "reasoning":
+                return str(payload.get("id") or "")
+        return ""
+
+    def _joined_text(self, content) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            texts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") in self._TEXT_TYPES:
+                    texts.append(item.get("text") or "")
+            return "\n".join(texts)
+        return ""
+
+    def _replace_text(self, content, new_text: str):
+        if isinstance(content, list):
+            replaced = False
+            for item in content:
+                if isinstance(item, dict) and item.get("type") in self._TEXT_TYPES:
+                    item["text"] = new_text
+                    replaced = True
+            if not replaced:
+                content.append({"type": "Text", "text": new_text})
+            return content
+        return [{"type": "output_text", "text": new_text}]
 
     def get_assistant_messages(self, lines):
         messages = []
         for idx, line in enumerate(lines):
-            line_type = line.get('type')
-            payload = line.get('payload', {})
+            line_type = line.get("type")
+            payload = line.get("payload", {})
 
             # response_item: role=assistant（主消息结构）
-            if line_type == 'response_item':
-                if payload.get('type') == 'message' and payload.get('role') == 'assistant':
+            if line_type == "response_item":
+                if payload.get("type") == "message" and payload.get("role") == "assistant":
                     messages.append((idx, line))
 
-            # event_msg: agent_message（assistant 回复的冗余副本，resume 时展示用）
-            elif line_type == 'event_msg':
-                pt = payload.get('type')
-                if pt == 'agent_message' and payload.get('message'):
+            # event_msg: 旧版冗余副本，以及桌面端 item_completed/AgentMessage
+            elif line_type == "event_msg":
+                pt = payload.get("type")
+                item = self._completed_item(line)
+                if item and item.get("type") == "AgentMessage" and self.extract_text_content(line):
                     messages.append((idx, line))
-                elif pt == 'task_complete' and payload.get('last_agent_message'):
+                elif pt == "agent_message" and payload.get("message"):
+                    messages.append((idx, line))
+                elif pt == "task_complete" and payload.get("last_agent_message"):
                     messages.append((idx, line))
 
         return messages
@@ -79,59 +144,57 @@ class CodexFormatStrategy(FormatStrategy):
     def get_thinking_items(self, lines):
         items = []
         for idx, line in enumerate(lines):
-            if line.get('type') == 'response_item':
-                payload = line.get('payload', {})
-                if payload.get('type') == 'reasoning':
+            if line.get("type") == "response_item":
+                payload = line.get("payload", {})
+                if payload.get("type") == "reasoning":
                     items.append((idx, line))
+                continue
+            item = self._completed_item(line)
+            if item and item.get("type") == "Reasoning":
+                items.append((idx, line))
         return items
 
     def extract_text_content(self, msg):
-        line_type = msg.get('type')
-        payload = msg.get('payload', {})
+        line_type = msg.get("type")
+        payload = msg.get("payload", {})
+
+        item = self._completed_item(msg)
+        if item and item.get("type") == "AgentMessage":
+            return self._joined_text(item.get("content"))
 
         # event_msg/agent_message
-        if line_type == 'event_msg':
-            pt = payload.get('type')
-            if pt == 'agent_message':
-                return payload.get('message', '')
-            if pt == 'task_complete':
-                return payload.get('last_agent_message', '')
-            return ''
+        if line_type == "event_msg":
+            pt = payload.get("type")
+            if pt == "agent_message":
+                return payload.get("message", "")
+            if pt == "task_complete":
+                return payload.get("last_agent_message", "")
+            return ""
 
         # response_item/assistant
-        content = payload.get('content', [])
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            texts = []
-            for item in content:
-                if isinstance(item, dict) and item.get('type') == 'output_text':
-                    texts.append(item.get('text', ''))
-            return '\n'.join(texts)
-        return ''
+        return self._joined_text(payload.get("content", []))
 
     def update_text_content(self, msg, new_text):
         updated = copy.deepcopy(msg)
-        line_type = updated.get('type')
-        payload = updated.get('payload', {})
+        line_type = updated.get("type")
+        payload = updated.get("payload", {})
+
+        item = self._completed_item(updated)
+        if item and item.get("type") == "AgentMessage":
+            item["content"] = self._replace_text(item.get("content"), new_text)
+            return updated
 
         # event_msg/agent_message 和 event_msg/task_complete
-        if line_type == 'event_msg':
-            pt = payload.get('type')
-            if pt == 'agent_message':
-                payload['message'] = new_text
-            elif pt == 'task_complete':
-                payload['last_agent_message'] = new_text
+        if line_type == "event_msg":
+            pt = payload.get("type")
+            if pt == "agent_message":
+                payload["message"] = new_text
+            elif pt == "task_complete":
+                payload["last_agent_message"] = new_text
             return updated
 
         # response_item/assistant
-        content = payload.get('content', [])
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get('type') == 'output_text':
-                    item['text'] = new_text
-        else:
-            payload['content'] = [{'type': 'output_text', 'text': new_text}]
+        payload["content"] = self._replace_text(payload.get("content", []), new_text)
         return updated
 
 
