@@ -53,7 +53,7 @@ export const AI_PROVIDER_PRESETS = [
       {
         label: 'China',
         value: 'cn_zh',
-        openaiBaseUrl: 'https://api.minimax.cn/v1',
+        openaiBaseUrl: 'https://api.minimaxi.com/v1',
         anthropicBaseUrl: 'https://api.minimaxi.com/anthropic',
         docsRoot: 'https://platform.minimaxi.com/docs'
       }

@@ -12,7 +12,7 @@ test('MiniMax offers Flash first and M3 while keeping custom lookup optional', (
   assert.equal(provider.defaultRegion, 'global_en')
   assert.deepEqual(provider.regions.map(({ openaiBaseUrl }) => openaiBaseUrl), [
     'https://api.minimax.io/v1',
-    'https://api.minimax.cn/v1'
+    'https://api.minimaxi.com/v1'
   ])
 })
 

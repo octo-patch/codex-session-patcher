@@ -34,7 +34,7 @@ def outgoing_requests(monkeypatch):
 
 @pytest.mark.parametrize("endpoint", [
     "https://api.minimax.io/v1",
-    "https://api.minimax.cn/v1/",
+    "https://api.minimaxi.com/v1/",
     "https://api.minimax.io/v1/chat/completions",
 ])
 @pytest.mark.parametrize("caller", ["session", "prompt"])
@@ -66,7 +66,7 @@ def test_flash_rewrite_request(endpoint, caller, outgoing_requests):
 
 @pytest.mark.parametrize("endpoint,model", [
     ("https://api.minimax.io/v1", "MiniMax-M3"),
-    ("https://api.minimax.cn/v1", "MiniMax-M3"),
+    ("https://api.minimaxi.com/v1", "MiniMax-M3"),
     ("https://api.minimaxi.com/v1", "MiniMax-M2.7"),
     ("https://api.minimax.io/v1", "MiniMax-M2.7-highspeed"),
     ("https://api.minimax.io/v1", "saved-custom-model"),

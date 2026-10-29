@@ -26,7 +26,7 @@ def build_rewrite_body(ai_endpoint: str, model: str, messages: list[dict]) -> di
         ai_endpoint
     ) in {
         "https://api.minimax.io/v1/chat/completions",
-        "https://api.minimax.cn/v1/chat/completions",
+        "https://api.minimaxi.com/v1/chat/completions",
     }:
         # Flash always thinks. Reserve room for thinking and the short answer,
         # and use low effort for this bounded rewrite task. Temperature is fixed.
